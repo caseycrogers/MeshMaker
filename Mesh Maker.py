@@ -1,5 +1,6 @@
 #Author-Casey Rogers
-#Description-Converts a triangular mesh into printable assemblable triangles
+#Description-Converts a triangular mesh into printable assemblable triangles
+
 '''
 '''
 
@@ -8,11 +9,17 @@ import math
 
 handlers = []
 
+""" Represents the different types of hinges. An openEdge hinge is used on
+    an edge in an open surface with no adjacent triangle on the given side.
+    IE, a side with no hinge at all. """
 class hingeType:
     male = "male"
     female = "female"
     openEdge = "openEdge"
-    
+
+""" The browser names of the various important comonents in the template triangle.
+    For example, "fStr1" represents the female hinge component on side one of the triangle.
+    Change these values if you modify the browser names. """
 fStr1 = "F1:1"
 fStr2 = "F1:2"
 fStr3 = "F1:3"
@@ -23,11 +30,16 @@ bStr1 = "binaryBits:1"
 bStr2 = "binaryBits:2"
 bStr3 = "binaryBits:3"
 cs = "frame"
+coreStr = "center"
 fStr1l, fStr1r, fStr2l, fStr2r, fStr3l, fStr3r = "1l", "1r", "2l", "2r", "3l", "3r"
 
 app = adsk.core.Application.get()
 ui  = app.userInterface
+design = app.activeProduct
+rootComp = design.rootComponent;
 
+""" This adds buttons to the toolbar panel and creates the input box, among
+    other things. """
 def run(context):
     try:
 
@@ -38,25 +50,33 @@ def run(context):
             def notify(self, args):
                 cmd = args.command
                 inputs = cmd.commandInputs
-        
+
                 selInput0 = inputs.addSelectionInput('mesh', 'Object to be printed', 'Select a body containing only tris to be printed')
                 selInput0.addSelectionFilter('Bodies')
                 selInput0.setSelectionLimits(1,1)
 
                 inputs.addStringValueInput('dir', 'Export directory', "C:/example/<mesh_name>")
 
+                inputs.addBoolValueInput('validate', 'Color bad triangles', True)
                 inputs.addBoolValueInput('debug', 'Debugging Mode', True)
                 inputs.addBoolValueInput('report', 'Report sides', True)
 
                 initialVal = adsk.core.ValueInput.createByReal(0)
                 inputs.addValueInput('testNum', 'Number of Triangles to Test', 'cm', initialVal)
 
-        
+                for body in rootComp.bRepBodies:
+                    if body.name[0:len(coreStr)] == coreStr:
+                        selInput = inputs.addSelectionInput(body.name, 'Faces with alternate center \'%s\'' % body.name, 'Select faces to receive alternate center')
+                        selInput.addSelectionFilter("Faces")
+                        selInput.setSelectionLimits(0, 0)
+
+
                 # Connect up to command related events.
                 onExecute = CommandExecutedHandler()
                 cmd.execute.add(onExecute)
                 handlers.append(onExecute)
-        
+
+
         class CommandExecutedHandler(adsk.core.CommandEventHandler):
             def __init__(self):
                 super().__init__()
@@ -65,11 +85,14 @@ def run(context):
                 ui  = app.userInterface
                 try:
                     command = args.firingEvent.sender
-            
-                # Get the data and settings from the command inputs.
+
+                    # Get the data and settings from the command inputs.
+                    coreDict = {}
                     for input in command.commandInputs:
                         if input.id == 'mesh':
                             mesh = input.selection(0).entity
+                        if input.id == 'validate':
+                            validate = input.value
                         if input.id == 'debug':
                             debug = input.value
                         if input.id == 'report':
@@ -79,39 +102,45 @@ def run(context):
                             print(saveDir)
                         if input.id == 'testNum':
                             testNum = input.value
-                    makeMesh(mesh, debug, report, saveDir, testNum)
+                        if input.id[0:len(coreStr)] == coreStr:
+                            tmp = []
+                            for i in range(input.selectionCount):
+                                tmp.append(input.selection(i).entity)
+                            coreDict[input.id] = tmp
+
+                    makeMesh(mesh, validate, debug, report, saveDir, testNum, coreDict)
                     # Do something with the results.
                 except:
                     if ui:
-                        ui.messageBox('command executed failed:\n{}'.format(traceback.format_exc()))   
+                        ui.messageBox('command executed failed:\n{}'.format(traceback.format_exc()))
 
         #add add-in to UI
         cmdDefs = ui.commandDefinitions
         mmButton = cmdDefs.addButtonDefinition('mmBtn', 'MeshMaker', 'Converts a mesh into printable triangles')
-        
+
         mmCreated = mmCommandCreatedEventHandler()
         mmButton.commandCreated.add(mmCreated)
         handlers.append(mmCreated)
 
         createPanel = ui.allToolbarPanels.itemById('SolidCreatePanel')
-        
+
         buttonControl = createPanel.controls.addCommand(mmButton, 'mmBtn')
-        
+
         # Make the button available in the panel.
         buttonControl.isPromotedByDefault = True
         buttonControl.isPromoted = True
-    
+
     except:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
-            
 
+""" Stop the add-in. """
 def stop(context):
     ui = None
     try:
         app = adsk.core.Application.get()
         ui  = app.userInterface
-        
+
         cmdDef = ui.commandDefinitions.itemById('mmBtn')
         if cmdDef:
             cmdDef.deleteMe()
@@ -124,7 +153,8 @@ def stop(context):
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
-def makeMesh(mesh, debug, report, saveDir, testNum):
+""" Execute the add-in given the supplied inputs. """
+def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
     # Find hinge, frame and center bodies
     app = adsk.core.Application.get();
     ui = app.userInterface;
@@ -132,7 +162,7 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
     if not design:
         ui.messageBox('No active Fusion design', 'No Design')
         return
-    
+
     rootComp = design.rootComponent;
     if not rootComp:
         return
@@ -188,8 +218,8 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
     if not (f1l and f1r and f2l and f2r and f3l and f3r):
         ui.messageBox("A female hinge body wasn't found (" + fStr1l +", " + fStr1r + ", " + fStr2l + "...)")
         return
-    
-    
+
+
 
     # Find the side parameters
     paramList = design.userParameters
@@ -211,14 +241,14 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
         return
     digits = digits.value
     uniqueEdges = mesh.edges.count
-    exp = 1 
+    exp = 1
     while (2**exp < uniqueEdges):
-        exp += 1     
+        exp += 1
     if exp > digits:
         ui.messageBox("Not enough binary digits, need at least %r digits to represent %.0f unique edges" %
         (exp, uniqueEdges))
         return
-    
+
     def hingeBodies(side1, sideNum):
         returnBodies = []
         if sideNum == 1:
@@ -236,7 +266,7 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
             fBodyr = f3r
             fOcc = f3
             mOcc = m3
-        
+
         mComp = mOcc.component
         fComp = fOcc.component
 
@@ -250,34 +280,21 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
                 returnBodies.append(proxy)
             returnBodies.append(fBodyl)
             returnBodies.append(fBodyr)
+        core = bodies.itemByName(coreStr)
+        if core:
+            returnBodies.append(core)
         return returnBodies
-            
-    
-    def process():
-        
-        # Assign the largest length to s1, improves reliability and solves a vertical s2/s3 glitch
-        if (sideTup[1].length > sideTup[0].length and sideTup[1].length > sideTup[2].length):
-            side1, side2, side3 = sideTup[1], sideTup[2], sideTup[0]
-        elif (sideTup[2].length > sideTup[0].length and sideTup[2].length > sideTup[1].length):
-            side1, side2, side3 = sideTup[2], sideTup[0], sideTup[1]
-        else:
-            side1, side2, side3 = sideTup[0], sideTup[1], sideTup[2]
-            
 
-        if not debug:
+    def coreBodies(face):
+        for core in coreDict:
+            if face in coreDict[core]:
+                return bodies.itemByName(core)
+        return None
+
+    def update(side1, side2, side3):
             try:
                 s1.expression = "%.3f mm" % side1.length
-            except:
-                # Attempt to recover by setting next side
-                pass
-
-            try:
                 s2.expression = "%.3f mm" % side2.length
-            except:
-                # Attempt to recover by setting next side
-                pass
-
-            try:
                 s3.expression = "%.3f mm" % side3.length
             except:
                 # Triangle Failed
@@ -285,20 +302,55 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
                 side1.index, side1.length, side1.hinge, side2.index, side2.length, side2.hinge,
                 side3.index, side3.length, side3.hinge), "Triangle Error", 1)
                 if yn != 0:
-                    return
-            export(side1, side2, side3)
+                    return True
+
+
+    def updateStable(side1, side2, side3):
+            try:
+                avg = (s1.length + s2.length + s3.length) / 3
+                s1.expression = "%.3f mm" % avg
+                s2.expression = "%.3f mm" % avg
+                s3.expression = "%.3f mm" % avg
+                s1.expression = "%.3f mm" % side1.length
+                s2.expression = "%.3f mm" % side2.length
+                s3.expression = "%.3f mm" % side3.length
+            except:
+                # Triangle Failed
+                yn = ui.messageBox("Triangle Failed!\n s1: %d, %.3f, %r\ns2: %d, %.3f, %r\ns3: %d, %.3f, %r" % (
+                side1.index, side1.length, side1.hinge, side2.index, side2.length, side2.hinge,
+                side3.index, side3.length, side3.hinge), "Triangle Error", 1)
+                if yn != 0:
+                    return True
+
+
+
+
+    """ Process a single triangle with the specified behavior (debug, report sides). """
+    def process():
+
+        # Assign the largest length to s1, improves reliability and solves a vertical s2/s3 glitch
+        if (sideTup[1].length > sideTup[0].length and sideTup[1].length > sideTup[2].length):
+            side1, side2, side3 = sideTup[1], sideTup[2], sideTup[0]
+        elif (sideTup[2].length > sideTup[0].length and sideTup[2].length > sideTup[1].length):
+            side1, side2, side3 = sideTup[2], sideTup[0], sideTup[1]
+        else:
+            side1, side2, side3 = sideTup[0], sideTup[1], sideTup[2]
+
+
+        validate(face, side1.length, side2.length, side3.length, validateColor)
+        if not debug:
+            if update(side1, side2, side3):
+                return True
+            export(side1, side2, side3, face)
         if report:
             ui.messageBox("s1: %d, %.3f, %r\ns2: %d, %.3f, %r\ns3: %d, %.3f, %r" % (
             side1.index, side1.length, side1.hinge, side2.index, side2.length, side2.hinge,
             side3.index, side3.length, side3.hinge))
-            """minSide = 10000
-            maxSide = 0
-            minSide = min(s1Val, s2Val, s3Val, minSide)
-            maxSide = max(s1Val, s2Val, s3Val, maxSide)
-            ui.messageBox("Min: %.2f\nMax: %.2f" % (minSide, maxSide))"""
-        
-    def export(side1, side2, side3):
-        
+
+    """ Export a triangle with the given sides. This involves combining
+        the proper hinges to the frame body and then exporting the frame body. """
+    def export(side1, side2, side3, face):
+
         exportMgr = design.exportManager
         fileName = "\\%s_%i_%i_%i__%.3f_%.3f_%.3f.stl" % (
         mesh.parentComponent.name, side1.index, side2.index, side3.index,
@@ -308,14 +360,18 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
         combineBodies.extend(binaryBodies(side1, b1, digits))
         combineBodies.extend(binaryBodies(side2, b2, digits))
         combineBodies.extend(binaryBodies(side3, b3, digits))
-        
-        
+
+
         combineBodies.extend(hingeBodies(side1, 1))
         combineBodies.extend(hingeBodies(side2, 2))
         combineBodies.extend(hingeBodies(side3, 3))
 
+        core = coreBodies(face)
+        if core:
+            combineBodies.append(core)
+
         combines = rootComp.features.combineFeatures
-        
+
         bodyCollection = adsk.core.ObjectCollection.create()
         for bod in combineBodies:
             bodyCollection.add(bod)
@@ -324,7 +380,7 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
 
         exportOptions = exportMgr.createSTLExportOptions(center, saveDir + fileName)
         exportMgr.execute(exportOptions)
-        
+
         combine.deleteMe()
 
     yn = ui.messageBox("There are %r total faces with %.0f unique edges" % (
@@ -332,6 +388,7 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
     if yn != 0:
         return True
     # Iterate through the Mesh and export the stls
+    # TEST handles the "num triangles to test" input
     sideIter = meshIter(mesh)
     try:
         i = 0
@@ -339,7 +396,9 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
         if testNum > 0:
             test = True
         while not test or testNum > 0:
-            sideTup = sideIter.next()
+            temp = sideIter.next()
+            sideTup = temp[0]
+            face = temp[1]
             cancel = process()
             if cancel:
                 ui.messageBox("Canceled with error")
@@ -350,7 +409,8 @@ def makeMesh(mesh, debug, report, saveDir, testNum):
         return
 
 
-
+""" Given a single side, return the bodies necessary to create its binary bit
+    pattern and its proper concavity indicator. """
 def binaryBodies(side, bitOcc, totalDigits):
     digits = side.index.bit_length()
     binary = str(bin(side.index))[2:]
@@ -358,12 +418,12 @@ def binaryBodies(side, bitOcc, totalDigits):
     offset = (totalDigits - digits) // 2
 
     bodies = bitOcc.component.bRepBodies
-    
+
     leftTopcc = proxyBody(bodies, bitOcc, "lConcavet")
     rightTopcc = proxyBody(bodies, bitOcc, "rConcavet")
     leftBotcc = proxyBody(bodies, bitOcc, "lConcaveb")
     rightBotcc = proxyBody(bodies, bitOcc, "rConcaveb")
-    
+
     if not (leftTopcc and rightTopcc and leftBotcc and rightBotcc):
         ui.messageBox("Concavity body not found: 'lConcavet, rConcavet, lConcaveb or rConcaveb'")
 
@@ -396,9 +456,9 @@ def binaryBodies(side, bitOcc, totalDigits):
         if side.convex:
             returnBodies.append(leftTopcc)
             returnBodies.append(leftBotcc)
-        
-     
-    #ui.messageBox("binary: %r    totalDigits: %s    Digits: %s  Offset: %s" % (binary, totalDigits, digits, offset))   
+
+
+    #ui.messageBox("binary: %r    totalDigits: %s    Digits: %s  Offset: %s" % (binary, totalDigits, digits, offset))
     for i in range(int(totalDigits)):
         #ui.messageBox("i - offset: %i" % (i - int(offset)))
         if digits % 2 == 1:
@@ -414,12 +474,18 @@ def binaryBodies(side, bitOcc, totalDigits):
             returnBodies.append(topBits[i])
     return returnBodies
 
-
+""" Given the name of a body, its parent occurence and the bodies within
+    the occurence's component, return the body's proxy. """
 def proxyBody(compBodies, occ, name):
     body = compBodies.itemByName(name)
-    
-    return body.createForAssemblyContext(occ)  
-    
+
+    if not body:
+        ui.messageBox('Component body named "%s" not found' % name)
+        return
+
+    return body.createForAssemblyContext(occ)
+
+""" A basic class describing the side of a triangle. """
 class Side:
     def __init__(self, index, length, hinge, convex):
         self.index = index
@@ -427,18 +493,20 @@ class Side:
         self.hinge = hinge
         self.convex = convex
 
+""" Return True if the edge represents a convex hinge, return false otherwise.
+    Code provided by Brian Ekins. """
 def convex(edge):
     if openEdge(edge):
         return False
-    try:        
+    try:
         # Get the two faces connected by the edge and get the normal of each face.
         face1 = edge.faces.item(0)
-        face2 = edge.faces.item(1)       
+        face2 = edge.faces.item(1)
         ret = face1.evaluator.getNormalAtPoint(face1.pointOnFace)
         normal1 = ret[1]
         ret = face2.evaluator.getNormalAtPoint(face2.pointOnFace)
         normal2 = ret[1]
-        
+
         # Get the co-edge of the selected edge for face1.
         if edge.coEdges.item(0).loop.face == face1:
             coEdge = edge.coEdges.item(0)
@@ -453,19 +521,21 @@ def convex(edge):
 
         # Get the cross product of the face normals.
         cross = normal1.crossProduct(normal2)
-        
+
         # Check to see if the cross product is in the same or opposite direction
         # of the co-edge direction.  If it's opposed then it's a convex angle.
         if edgeDir.angleTo(cross) > math.pi/2:
             return True
         else:
-            return False       
+            return False
     except:
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
+""" An iterator that iterates through a given bRep object, returns a list
+    containing three Side objects for each triangular face in the bRep object. """
 class meshIter:
-    
+
     def __init__(self, mesh):
         self.mesh = mesh
 
@@ -505,21 +575,63 @@ class meshIter:
                 e += 1
 
             self.f += 1
-            return rv
+            return rv, face
         raise StopIteration()
-    
 
+""" Confirm that a triangle has valid values, if not, color invalid triangle
+    red and ask if the user wishes to cancel. """
+def validate(face, s1, s2, s3, color):
+    try:
+        app = adsk.core.Application.get();
+        ui = app.userInterface;
+        design = app.activeProduct
+        paramList = design.userParameters
+
+        minAlt = paramList.itemByName("minAltitude")
+        if not minAlt:
+            ui.messageBox("Parameter 'minAltitude' not found")
+
+
+        libs = app.materialLibraries
+        lib = libs.itemByName("Fusion 360 Appearance Library")
+        #for lib in libs:
+        #    ui.messageBox(str(lib.name))
+        if not lib:
+            ui.messageBox("Material library 'Fusion 360 Appearance Library' not found")
+        apps = lib.appearances
+
+
+        apps = design.appearances
+        badAlt = apps.itemByName("Short Altitude")
+        badSide = apps.itemByName("Short Side")
+        if not badAlt or not badSide:
+            ui.messageBox("Appearance 'Short Altitude' or appearance 'Short Side' not found")
+        if not minAlt:
+            ui.messageBox("Parameter 'minAltitude' not found")
+
+
+        # Scary formula for calculating the smallest altitude of a triangle give three sides, where s1 is largest
+        altitude = ((2*(s1**2)*(s2**2) + 2*(s2**2)*(s3**2) + 2*(s1**2)*(s3**2) - s3**4 - s2**4 - s1**4)**.5) / (2*s1)
+
+        minAlt = minAlt.value * 10
+
+        if s2 < 20 or s3 < 20:
+            if color:
+                face.appearance = badSide
+        elif altitude < minAlt:
+            if color:
+                face.appearance = badAlt
+    except:
+            ui.messageBox('Validate Failed:\n{}'.format(traceback.format_exc()))
+
+
+""" Return the length of the given linear edge in MM. Return value is a double. """
 def brepLength(edge):
     return edge.startVertex.geometry.distanceTo(edge.endVertex.geometry) * 10
-    
+
+""" Return True if the given edge is associated with only a single face. IE
+    it borders a hole in a mesh and should not be given a hinge. """
 def openEdge(edge):
     if edge.faces.count == 1:
         return True
     return False
-    
-
-
-#Explicitly call the run function.
-#stop({'IsApplicationStartup':True})
-#run({'IsApplicationStartup':True})
-#stop({'IsApplicationStartup':True})
