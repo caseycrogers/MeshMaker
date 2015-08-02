@@ -1,5 +1,7 @@
 #Author-Casey Rogers
-#Description-Converts a triangular mesh into printable assemblable triangles
+#Description-Converts a triangular mesh into printable assemblable triangles
+
+
 
 '''
 '''
@@ -305,24 +307,6 @@ def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
                     return True
 
 
-    def updateStable(side1, side2, side3):
-            try:
-                avg = (s1.length + s2.length + s3.length) / 3
-                s1.expression = "%.3f mm" % avg
-                s2.expression = "%.3f mm" % avg
-                s3.expression = "%.3f mm" % avg
-                s1.expression = "%.3f mm" % side1.length
-                s2.expression = "%.3f mm" % side2.length
-                s3.expression = "%.3f mm" % side3.length
-            except:
-                # Triangle Failed
-                yn = ui.messageBox("Triangle Failed!\n s1: %d, %.3f, %r\ns2: %d, %.3f, %r\ns3: %d, %.3f, %r" % (
-                side1.index, side1.length, side1.hinge, side2.index, side2.length, side2.hinge,
-                side3.index, side3.length, side3.hinge), "Triangle Error", 1)
-                if yn != 0:
-                    return True
-
-
 
 
     """ Process a single triangle with the specified behavior (debug, report sides). """
@@ -397,6 +381,8 @@ def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
             test = True
         while not test or testNum > 0:
             temp = sideIter.next()
+            if not temp:
+                return
             sideTup = temp[0]
             face = temp[1]
             cancel = process()
@@ -425,7 +411,7 @@ def binaryBodies(side, bitOcc, totalDigits):
     rightBotcc = proxyBody(bodies, bitOcc, "rConcaveb")
 
     if not (leftTopcc and rightTopcc and leftBotcc and rightBotcc):
-        ui.messageBox("Concavity body not found: 'lConcavet, rConcavet, lConcaveb or rConcaveb'")
+        return
 
     topBits = []
     botBits = []
@@ -551,6 +537,9 @@ class meshIter:
             face = self.faces.item(self.f)
             edges = face.edges
             eCount = edges.count
+            if eCount > 3:
+                ui.messageBox("Non-triangular face found")
+                return False
             rv = []
             e = 0
             while (e < eCount):
