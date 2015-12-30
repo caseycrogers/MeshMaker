@@ -3,11 +3,13 @@
 
 
 
+
 '''
 '''
 
 import adsk.core, adsk.fusion, traceback
 import math
+import os
 
 handlers = []
 
@@ -33,12 +35,18 @@ bStr2 = "binaryBits:2"
 bStr3 = "binaryBits:3"
 cs = "frame"
 coreStr = "center"
+templateStr = "Mesh Maker Template"
 fStr1l, fStr1r, fStr2l, fStr2r, fStr3l, fStr3r = "1l", "1r", "2l", "2r", "3l", "3r"
 
+"""design = app.activeProduct
+rootComp = design.rootComponent;"""
 app = adsk.core.Application.get()
 ui  = app.userInterface
-design = app.activeProduct
-rootComp = design.rootComponent;
+templateDesign = None
+templateComp = None
+meshDesign = None
+meshComp = None
+
 
 """ This adds buttons to the toolbar panel and creates the input box, among
     other things. """
@@ -62,15 +70,17 @@ def run(context):
                 inputs.addBoolValueInput('validate', 'Color bad triangles', True)
                 inputs.addBoolValueInput('debug', 'Debugging Mode', True)
                 inputs.addBoolValueInput('report', 'Report sides', True)
+                inputs.addBoolValueInput('preview', 'Preview assembly', True)
 
                 initialVal = adsk.core.ValueInput.createByReal(0)
                 inputs.addValueInput('testNum', 'Number of Triangles to Test', 'cm', initialVal)
 
-                for body in rootComp.bRepBodies:
+                # Handles core bodies, feature currently not supported
+                """for body in rootComp.bRepBodies:
                     if body.name[0:len(coreStr)] == coreStr:
                         selInput = inputs.addSelectionInput(body.name, 'Faces with alternate center \'%s\'' % body.name, 'Select faces to receive alternate center')
                         selInput.addSelectionFilter("Faces")
-                        selInput.setSelectionLimits(0, 0)
+                        selInput.setSelectionLimits(0, 0)"""
 
 
                 # Connect up to command related events.
@@ -99,6 +109,8 @@ def run(context):
                             debug = input.value
                         if input.id == 'report':
                             report = input.value
+                        if input.id == 'preview':
+                            preview = input.value
                         if input.id == 'dir':
                             saveDir = input.value
                             print(saveDir)
@@ -110,7 +122,7 @@ def run(context):
                                 tmp.append(input.selection(i).entity)
                             coreDict[input.id] = tmp
 
-                    makeMesh(mesh, validate, debug, report, saveDir, testNum, coreDict)
+                    makeMesh(mesh, validate, debug, report, preview, saveDir, testNum, coreDict)
                     # Do something with the results.
                 except:
                     if ui:
@@ -138,11 +150,7 @@ def run(context):
 
 """ Stop the add-in. """
 def stop(context):
-    ui = None
     try:
-        app = adsk.core.Application.get()
-        ui  = app.userInterface
-
         cmdDef = ui.commandDefinitions.itemById('mmBtn')
         if cmdDef:
             cmdDef.deleteMe()
@@ -156,20 +164,38 @@ def stop(context):
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
 """ Execute the add-in given the supplied inputs. """
-def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
-    # Find hinge, frame and center bodies
-    app = adsk.core.Application.get();
-    ui = app.userInterface;
-    design = app.activeProduct
-    if not design:
+def makeMesh(mesh, validateColor, debug, report, preview, saveDir, testNum, coreDict):
+    # Find the design files and root components
+    global app
+    global ui
+    global templateDesign
+    global templateComp
+    global meshDesign
+    global meshComp
+    app = adsk.core.Application.get()
+    ui  = app.userInterface
+    meshDesign = app.activeProduct
+    meshComp = meshDesign.rootComponent
+    docs = app.documents
+    
+    templateDoc = None
+    for i in range(docs.count):
+        doc = docs.item(i)
+        if doc.name[0:len(templateStr)] == templateStr:
+            templateDoc = doc
+    if not templateDoc:
+        ui.messageBox('Could not find "' + templateStr + '". Open the file\
+        and re-run')
+        return
+    templateDesign = templateDoc.products.itemByProductType("DesignProductType")
+    if not templateDesign:
         ui.messageBox('No active Fusion design', 'No Design')
         return
-
-    rootComp = design.rootComponent;
-    if not rootComp:
-        return
-    occs = rootComp.occurrences
-    bodies = rootComp.bRepBodies
+    templateComp = templateDesign.rootComponent
+    
+    # Find hinge, frame and center bodies
+    occs = templateComp.occurrences
+    bodies = templateComp.bRepBodies
     # Find the Hinge components and center body
     f1 = occs.itemByName(fStr1)
     f2 = occs.itemByName(fStr2)
@@ -183,7 +209,7 @@ def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
     b2 = occs.itemByName(bStr2)
     b3 = occs.itemByName(bStr3)
 
-    center = rootComp.bRepBodies.itemByName("frame")
+    center = templateComp.bRepBodies.itemByName("frame")
 
     if not f1:
         ui.messageBox("Side 1 female hinge (Component '" + fStr1 + "') not found")
@@ -221,10 +247,8 @@ def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
         ui.messageBox("A female hinge body wasn't found (" + fStr1l +", " + fStr1r + ", " + fStr2l + "...)")
         return
 
-
-
     # Find the side parameters
-    paramList = design.userParameters
+    paramList = templateDesign.userParameters
     s1 = paramList.itemByName("sideOne")
     s2 = paramList.itemByName("sideTwo")
     s3 = paramList.itemByName("sideThree")
@@ -295,9 +319,17 @@ def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
 
     def update(side1, side2, side3):
             try:
-                s1.expression = "%.3f mm" % side1.length
-                s2.expression = "%.3f mm" % side2.length
-                s3.expression = "%.3f mm" % side3.length
+                if isinstance(side1, float):
+                    s1.expression = "%.3f mm" % side1
+                    s2.expression = "%.3f mm" % side2
+                    s3.expression = "%.3f mm" % side3
+                else:
+                    s1.expression = "%.3f mm" % ((side1.length + s1.value*10)/2.0)
+                    s2.expression = "%.3f mm" % ((side2.length + s2.value*10)/2.0)
+                    s3.expression = "%.3f mm" % ((side3.length + s3.value*10)/2.0)
+                    s1.expression = "%.3f mm" % side1.length
+                    s2.expression = "%.3f mm" % side2.length
+                    s3.expression = "%.3f mm" % side3.length
             except:
                 # Triangle Failed
                 yn = ui.messageBox("Triangle Failed!\n s1: %d, %.3f, %r\ns2: %d, %.3f, %r\ns3: %d, %.3f, %r" % (
@@ -326,6 +358,7 @@ def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
             if update(side1, side2, side3):
                 return True
             export(side1, side2, side3, face)
+            #update(250.0, 250.0, 250.0)
         if report:
             ui.messageBox("s1: %d, %.3f, %r\ns2: %d, %.3f, %r\ns3: %d, %.3f, %r" % (
             side1.index, side1.length, side1.hinge, side2.index, side2.length, side2.hinge,
@@ -335,10 +368,41 @@ def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
         the proper hinges to the frame body and then exporting the frame body. """
     def export(side1, side2, side3, face):
 
-        exportMgr = design.exportManager
-        fileName = "\\%s_%i_%i_%i__%.3f_%.3f_%.3f.stl" % (
+        exportMgr = templateDesign.exportManager
+        importMgr = app.importManager
+        fileName = "\\%s_%i_%i_%i__%.3f_%.3f_%.3f" % (
         mesh.parentComponent.name, side1.index, side2.index, side3.index,
         side1.length, side2.length, side3.length)
+
+        """ Place the triangle being assembled on the main assembly. """
+        def preview():
+            tempComp = combine.bodies.item(0).parentComponent
+
+            exportOptions = exportMgr.createSATExportOptions(saveDir + fileName + ".sat", tempComp)
+            exportMgr.execute(exportOptions)
+            importOptions = importMgr.createSATImportOptions(saveDir + fileName + ".sat")
+            importMgr.importToTarget(importOptions, meshComp)
+
+            occ = findOccByName(fileName[1:] + ":1", meshComp)
+            if occ:
+                body = occ.component.bRepBodies.item(0)
+                body = body.createForAssemblyContext(occ)
+            move(body, face)
+
+        def move(body, face):
+            # Create a collection of entities for move
+            moveBody = adsk.core.ObjectCollection.create()
+            moveBody.add(body)
+
+            # Create a transform to do move
+            transform = adsk.core.Matrix3D.create()
+            inputs = originInputs() + faceInputs(face, side1, side2, side3)
+            transform.setToAlignCoordinateSystems(*inputs)
+
+            # Create a move feature
+            moveFeats = meshComp.features.moveFeatures
+            moveFeatureInput = moveFeats.createInput(moveBody, transform)
+            moveFeats.add(moveFeatureInput)
 
         combineBodies = []
         combineBodies.extend(binaryBodies(side1, b1, digits))
@@ -354,18 +418,39 @@ def makeMesh(mesh, validateColor, debug, report, saveDir, testNum, coreDict):
         if core:
             combineBodies.append(core)
 
-        combines = rootComp.features.combineFeatures
+        combines = templateComp.features.combineFeatures
 
         bodyCollection = adsk.core.ObjectCollection.create()
         for bod in combineBodies:
             bodyCollection.add(bod)
         combInput = combines.createInput(center, bodyCollection)
+        combInput.isNewComponent = True
         combine = combines.add(combInput)
 
-        exportOptions = exportMgr.createSTLExportOptions(center, saveDir + fileName)
+
+        exportOptions = exportMgr.createSTLExportOptions(center, saveDir + fileName + ".stl")
         exportMgr.execute(exportOptions)
 
+        if preview:
+            preview()
+
+        """tempComp = combine.bodies.item(0).parentComponent
+        occs = tempComp.allOccurrences
+        ui.messageBox(str(occs.count))
+        for i in range(occs.count):
+            occs.item(i).deleteMe()"""
         combine.deleteMe()
+            
+
+        timeline = templateDesign.timeline
+        tempFeature = timeline.item(timeline.markerPosition - 1).entity
+        tempFeature.deleteMe()
+
+        os.remove(saveDir + fileName + ".sat")
+
+
+        adsk.doEvents()
+        #app.activeViewport.refresh()
 
     yn = ui.messageBox("There are %r total faces with %.0f unique edges" % (
     mesh.faces.count, uniqueEdges), "Mesh Maker", 1)
@@ -571,10 +656,7 @@ class meshIter:
     red and ask if the user wishes to cancel. """
 def validate(face, s1, s2, s3, color):
     try:
-        app = adsk.core.Application.get();
-        ui = app.userInterface;
-        design = app.activeProduct
-        paramList = design.userParameters
+        paramList = templateDesign.userParameters
 
         minAlt = paramList.itemByName("minAltitude")
         if not minAlt:
@@ -590,7 +672,7 @@ def validate(face, s1, s2, s3, color):
         apps = lib.appearances
 
 
-        apps = design.appearances
+        apps = templateDesign.appearances
         badAlt = apps.itemByName("Short Altitude")
         badSide = apps.itemByName("Short Side")
         if not badAlt or not badSide:
@@ -624,3 +706,94 @@ def openEdge(edge):
     if edge.faces.count == 1:
         return True
     return False
+
+def originInputs():
+    paramList = templateDesign.userParameters
+    thick = paramList.itemByName("thickness")
+    if not thick:
+        ui.messageBox("Parameter 'thickness' not found")
+    thick = thick.value/2.0
+    lst = []
+    # fromOrigin
+    lst.append(adsk.core.Point3D.create(0.0, 0.0, thick))
+    # fromX
+    lst.append(adsk.core.Vector3D.create(1.0, 0.0, 0.0))
+    # fromY
+    lst.append(adsk.core.Vector3D.create(0.0, -1.0, 0.0))
+    # fromZ
+    lst.append(adsk.core.Vector3D.create(0.0, 0.0, -1.0))
+    return lst
+
+def faceInputs(face, side1, side2, side3):
+    edges = face.edges
+    edge1, edge2 = None, None
+    for i in range(edges.count):
+        edge = edges.item(i)
+        length = edgeLength(edge)
+        if length == side1.length:
+            edge1 = edge
+        elif length == side2.length:
+            edge2 = edge
+    if not edge1 or not edge2:
+        ui.messageBox("faceInputs: Edges don't match")
+    point = findSharedPoint(edge1, edge2)
+    if not point:
+        ui.messageBox("faceInputs: Could not find a shared point")
+
+    lst = []
+    # toOrigin
+    lst.append(point)
+    # toX
+    vX = edgeToVector(edge1, point)
+    vX.scaleBy(1.0/vX.length)
+    # toZ
+    success, vZ = face.evaluator.getNormalAtPoint(face.pointOnFace)
+    if not success:
+        ui.messageBox("faceInputs: Couldn't find normal")
+    vZ.scaleBy(1.0/vZ.length)
+    # toY
+    vY = vZ.crossProduct(vX)
+    vY.scaleBy(1.0/vY.length)
+    lst.append(vX)
+    lst.append(vY)
+    lst.append(vZ)
+    message = []
+    for v in lst[1:]:
+        message.append(v.length)
+    return lst
+
+def findOccByName(name, rootComp):
+    compList = rootComp.allOccurrences
+    for i in range(compList.count):
+        comp = compList.item(i)
+        if comp.name == name:
+            return comp
+    ui.messageBox("findCompByName: Could not find a component named %s" % name)
+    return None
+
+def edgeLength(edge):
+    return 10*edge.startVertex.geometry.distanceTo(edge.endVertex.geometry)
+
+# Returns a point3D object A where A is shared between the two input edges
+def findSharedPoint(edge0, edge1):
+    point0_0 = edge0.startVertex
+    point0_1 = edge0.endVertex
+    point1_0 = edge1.startVertex
+    point1_1 = edge1.endVertex
+    if (point0_0 == point1_0) or (point0_0 == point1_1):
+        pointA = point0_0
+    elif (point0_1 == point1_0) or (point0_1 == point1_1):
+        pointA = point0_1
+    else:
+        return False
+    return pointA.geometry
+
+# Returns a vector aligned with the given edge starting at the given point
+def edgeToVector(edge, point):
+    p1, p2 = edge.startVertex.geometry, edge.endVertex.geometry
+    if point.isEqualTo(p1):
+        return point.vectorTo(p2)
+    elif point.isEqualTo(p2):
+        return point.vectorTo(p1)
+    else:
+        ui.messageBox("edgeToVector: point isn't on edge")
