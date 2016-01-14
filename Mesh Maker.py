@@ -324,9 +324,9 @@ def makeMesh(mesh, validateColor, debug, report, preview, saveDir, testNum, core
                     s2.expression = "%.3f mm" % side2
                     s3.expression = "%.3f mm" % side3
                 else:
-                    s1.expression = "%.3f mm" % ((side1.length + s1.value*10)/2.0)
-                    s2.expression = "%.3f mm" % ((side2.length + s2.value*10)/2.0)
-                    s3.expression = "%.3f mm" % ((side3.length + s3.value*10)/2.0)
+                    #s1.expression = "%.3f mm" % ((side1.length + s1.value*10)/2.0)
+                    #s2.expression = "%.3f mm" % ((side2.length + s2.value*10)/2.0)
+                    #s3.expression = "%.3f mm" % ((side3.length + s3.value*10)/2.0)
                     s1.expression = "%.3f mm" % side1.length
                     s2.expression = "%.3f mm" % side2.length
                     s3.expression = "%.3f mm" % side3.length
@@ -534,13 +534,14 @@ def binaryBodies(side, bitOcc, totalDigits):
         #ui.messageBox("i - offset: %i" % (i - int(offset)))
         if digits % 2 == 1:
             strIndex = i - int(offset)
+            #ui.messageBox("strIndex: %r    binary: %r" % (strIndex, binary))
         else:
             strIndex = i - int(offset) - 1
+            #ui.messageBox("strIndex: %r    binary: %r" % (strIndex, binary))
         if i < offset or i >= totalDigits - offset:
             returnBodies.append(botBits[i])
-            #ui.messageBox("topBit: False  i: %i" % i)
+        #ui.messageBox("binary: %r    index: %i" % (binary, i - int(offset)))
         elif not strIndex < 0 and binary[strIndex] == '1':
-            #ui.messageBox("binary: %r    index: %i" % (binary, i - int(offset)))
             returnBodies.append(botBits[i])
             returnBodies.append(topBits[i])
     return returnBodies
